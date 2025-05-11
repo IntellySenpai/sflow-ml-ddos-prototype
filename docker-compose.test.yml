@@ -1,0 +1,169 @@
+services:
+  collector:
+    image: sflow/sflowtool
+    container_name: collector
+    command: [ "-f", "10.0.1.3/6343", "-f", "10.0.1.4/6343" ]
+    depends_on:
+      - parser
+    ports:
+      - "${MAIN_COLLECTOR_PORT}:6343/udp"
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.2
+
+  parser:
+    image: sflow/sflowtool
+    container_name: parser
+    command: ["-l"]
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "udp://10.0.2.5:5514"
+        tag: "sflowtool"
+        syslog-format: rfc5424
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.3
+
+  sflow-rt:
+    image: sflow/${RT_IMAGE}
+    container_name: sflow-rt
+    depends_on:
+      - collector
+    volumes:
+      - ./sflow-rt/store:/sflow-rt/store
+    ports:
+      - '${SFLOWRT_PORT}:8008'
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.4
+
+  preprocessor-1:
+    build: ./preprocessor-1
+    container_name: preprocessor-1
+    environment:
+      ABUSE_IPDB_API_KEY: ${ABUSE_IPDB_API_KEY}
+      DB_PATH: /data/ip_data.db
+    depends_on:
+      - parser
+    volumes:
+      - ./preprocessor-1/ip_data.db:/data/ip_data.db
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.5
+
+  preprocessor-2:
+    build: preprocessor-2
+    container_name: preprocessor-2
+    depends_on:
+      - preprocessor-1
+      - timescaledb
+    volumes:
+      - ./preprocessor-2/logs:/app/logs
+    environment:
+      TIMESCALEDB_HOST: timescaledb
+      TIMESCALE_USER: ${TIMESCALE_USER}
+      TIMESCALE_PASSWORD: ${TIMESCALE_PASSWORD}
+      TIMESCALE_DB: ${TIMESCALE_DB}
+      METADATA_TTL_SECONDS: ${METADATA_TTL_SECONDS}
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.12
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: timescaledb
+    environment:
+      POSTGRES_USER: ${TIMESCALE_USER}
+      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD}
+      POSTGRES_DB: ${TIMESCALE_DB}
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.6
+
+  detector:
+    build: ./detector
+    container_name: detector
+    environment:
+      MITIGATOR_HOST: mitigator
+      MITIGATOR_API_PORT: ${MITIGATOR_API_PORT}
+      DB_NAME: ${TIMESCALE_DB}
+      DB_USER: ${TIMESCALE_USER}
+      DB_PASSWORD: ${TIMESCALE_PASSWORD}
+      DB_HOST: timescaledb
+      DB_TABLE: ${TIMESCALEDB_TABLE}
+      DB_PORT: ${TIMESCALEDB_PORT}
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.7
+
+  mitigator:
+    build: ./mitigator
+    container_name: mitigator
+    environment:
+      BGP_LOCAL_AS: ${BGP_LOCAL_AS}
+      BGP_PEER_AS: ${BGP_PEER_AS}
+      BGP_ROUTER_ID: ${BGP_ROUTER_ID}
+      BGP_PEERS: ${BGP_PEERS}
+      BGP_BLACKHOLE_WITHDRAW_TIMEOUT: ${BGP_BLACKHOLE_WITHDRAW_TIMEOUT}
+      BGP_BLACKHOLE_COMMUNITY: ${BGP_BLACKHOLE_COMMUNITY}
+    ports:
+      - "${MITIGATOR_BGP_PORT}:179"
+      - "${MITIGATOR_API_PORT}:5000"
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.8
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/var:/prometheus
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.9
+
+  renderer:
+    image: grafana/grafana-image-renderer
+    container_name: renderer
+    restart: unless-stopped
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.10
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    environment:
+      - GF_INSTALL_PLUGINS=${GF_INSTALL_PLUGINS}
+      - GF_RENDERING_SERVER_URL=${GF_RENDERING_SERVER_URL}
+      - GF_RENDERING_CALLBACK_URL=${GF_RENDERING_CALLBACK_URL}
+    depends_on:
+      - prometheus
+      - renderer
+    volumes:
+      - ./grafana/prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/dashboards:/etc/grafana/dashboards
+      - ./grafana/var:/var/lib/grafana
+    ports:
+      - '${GRAFANA_PORT}:3000'
+    networks:
+      ddos-test:
+        ipv4_address: 10.0.2.11
+
+networks:
+  ddos-test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.2.0/24
+
+volumes:
+  timescaledb_data:

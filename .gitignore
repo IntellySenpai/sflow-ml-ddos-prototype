@@ -1,0 +1,4 @@
+env/
+config/
+venv/
+timescaledb/var

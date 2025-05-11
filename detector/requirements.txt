@@ -1,0 +1,7 @@
+flask
+pandas
+requests
+sqlalchemy
+joblib
+scikit-learn
+psycopg2-binary

@@ -1,0 +1,29 @@
+template {
+	neighbor local {
+		local-as {{ LOCAL_AS }};
+		peer-as {{ PEER_AS }};
+		router-id {{ ROUTER_ID }};
+		local-address {{ ROUTER_ID }};
+		hold-time 180;
+		group-updates false;
+
+		family {
+			ipv4 unicast;
+		}
+
+		capability {
+			graceful-restart 1200;
+		}
+ 	}
+}
+
+{% for peer_ip in PEERS %}
+neighbor {{ peer_ip }} {
+    inherit local;
+}
+{% endfor %}
+
+process mitigator-api {
+  run python /app/api.py;
+  encoder json;
+}
